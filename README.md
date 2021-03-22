@@ -1,6 +1,12 @@
 # ltxcut
 formats a table-like stream into a LaTeX-table
 
+## Installation
+
+```bash
+cargo install ltxcut
+```
+
 ## Usage:
 
 ```
