@@ -176,7 +176,7 @@ fn main() -> Result<(), String> {
     }).collect();
 
     let res = 
-    if input.is_empty() {
+    if input.is_empty() || input == "-" {
         options.cut(std::io::stdin().lock())
     } else {
         let p = Path::new(&input);
