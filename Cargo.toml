@@ -1,6 +1,6 @@
 [package]
 name = "ltxcut"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Jan Starke <Jan.Starke@outofbed.org>"]
 edition = "2018"
 description = "formats a table-like stream into a LaTeX-table"

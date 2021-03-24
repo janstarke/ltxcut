@@ -3,7 +3,10 @@ use std::path::Path;
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 use string_builder::Builder;
+use std::collections::{HashMap};
+use std::cell::RefCell;
 
+#[derive(Clone)]
 enum EncodingOption {
     LaTeX,
     Listing,
@@ -21,6 +24,57 @@ struct CutOptions {
     escape_fields: Vec<EncodingOption>
 }
 
+struct Converter<T> where T: Fn(usize) -> Box<dyn Fn(String) -> String> {
+    converters: RefCell<HashMap<usize, Box<dyn Fn(String) -> String>>>,
+    get_converter: T,
+}
+
+impl<T> Converter <T> where T: Fn(usize) -> Box<dyn Fn(String) -> String> {
+    fn new (get_converter: T) -> Converter<T> {
+        Converter {
+            converters: RefCell::new(HashMap::new()),
+            get_converter,
+        }
+    }
+
+    fn call(&self, idx: usize, value: String) -> String {
+        let mut converter = self.converters.borrow_mut();
+        match converter.get(&idx) {
+            Some(v)     =>  (v)(value),
+            None        =>  {
+                let v = (self.get_converter)(idx);
+                let result = (&v)(value);
+                converter.insert(idx, v);
+                result
+            }
+        }
+    }
+}
+
+fn field_wrapper(fields: &Vec<String>, id: usize) -> Box<dyn Fn(String) -> String> {
+    if id >= fields.len() {
+        return Box::new(|s| s);
+    }
+    let wrap_function = fields[id].clone();
+    
+    if wrap_function.is_empty() {
+        Box::new(|s| s)
+    } else {
+        Box::new(move |s| String::from(format!("\\{}{{{}}}", wrap_function, s)))
+    }
+}
+
+fn field_encoder (fields: &Vec<EncodingOption>, id: usize) -> Box<dyn Fn(String) -> String> {
+    if id >= fields.len() {
+        return Box::new(|s| s);
+    }
+    match fields[id] {
+        EncodingOption::LaTeX   => Box::new(escape_latex),
+        EncodingOption::Listing => Box::new(escape_listing),
+        EncodingOption::None    => Box::new(|s| s)
+    }
+}
+
 impl CutOptions {
     pub fn new() -> CutOptions {
         CutOptions {
@@ -35,41 +89,7 @@ impl CutOptions {
         }
     }
 
-    fn encode_field(&self, id: usize, value: &str) -> String {
-        if id >= self.escape_fields.len() {
-            return String::from(value);
-        }
-        match self.escape_fields[id] {
-            EncodingOption::LaTeX   => escape_latex(value),
-            EncodingOption::Listing => escape_listing(value),
-            EncodingOption::None    => String::from(value)
-        }
-    }
-
-    fn wrap_field(&self, id: usize, value: &str) -> String {
-        if id >= self.wrap_fields.len() {
-            return String::from(value);
-        }
-
-        let wrap_function = &self.wrap_fields[id];
-        if wrap_function.is_empty() {
-            return self.encode_field(id, value);
-        }
-
-        String::from(format!("\\{}{{{}}}", &wrap_function, self.encode_field(id, value)))
-    }
-
-    fn get_field(&self, id: usize, input_fields: &Vec<&str>) -> String {
-        self.wrap_field(id,
-            if id < input_fields.len() {
-                input_fields[id]
-            } else {
-                ""
-            }
-        )
-    }
-
-    fn cut_line(&self, line: &str) -> std::io::Result<()> {
+    fn cut_line(&self, line: &str, converter: &Box<dyn Fn(usize, String) -> String>) -> std::io::Result<()> {
         if ! line.contains(&self.input_delimiter) {
             if ! self.notonly_delimited {
                 println!("{}", line);
@@ -79,16 +99,17 @@ impl CutOptions {
 
         let input_fields: Vec<&str> = line.split(&self.input_delimiter).collect();
         let mut output_fields: Vec<String> = Vec::new();
-        for column_id in &self.fields {
-            let id = column_id - 1;
 
-            // handle missing field
-            if id >= input_fields.len() {
-                output_fields.push(String::new());
-                continue;
-            }
+        for output_column in 0..self.fields.len() {
+            let input_column = self.fields[output_column] - 1;
 
-            output_fields.push(self.get_field(id, &input_fields));
+            output_fields.push((converter)(output_column,
+                if input_column < input_fields.len() {
+                    String::from(input_fields[input_column])
+                } else {
+                    String::new()
+                }
+            ));
         }
         let out_line: String = output_fields.join(&self.output_delimiter);
 
@@ -100,16 +121,24 @@ impl CutOptions {
         Ok(())
     }
 
-    fn cut<T: BufRead>(&self, reader: T) -> std::io::Result<()> {
+    fn cut<'a, T: BufRead>(&'a self, reader: T) -> std::io::Result<()> {
+        let f = self.wrap_fields.clone();
+        let wrapper = Converter::new(move |i| field_wrapper(&f, i));
+
+        let f = self.escape_fields.clone();
+        let encoder = Converter::new(move |i| field_encoder(&f, i));
+
+        let converter:Box<dyn Fn(usize, String) -> String> = Box::new(move |i,v| wrapper.call(i, encoder.call(i, v)));
+
         for line in reader.lines() {
-            self.cut_line(&line?)?;
+            self.cut_line(&line?, &converter)?;
         }
 
         Ok(())
     }
 }
 
-fn escape_latex (value: &str) -> String {
+fn escape_latex (value: String) -> String {
     let mut builder = Builder::default();
     let specials = "~^\\";
     let simple_specials = "&%$#_{}";
@@ -135,7 +164,7 @@ fn escape_latex (value: &str) -> String {
 }
 
 
-fn escape_listing (value: &str) -> String {
+fn escape_listing (value: String) -> String {
     let mut builder = Builder::default();
     let simple_specials = "\\_{}";
 
@@ -170,9 +199,11 @@ fn main() -> Result<(), String> {
     options.fields = fields.split(",").map(|s| {s.parse::<usize>().expect("unable to read field ids")}).collect();
     options.wrap_fields = wrap_fields.split(",").map(|s| String::from(s)).collect();
     options.escape_fields = escape_fields.split(",").map(|s| match &s.to_lowercase()[..] {
-        "latex"     => EncodingOption::LaTeX,
+        "none"      => EncodingOption::None,
+        ""          => EncodingOption::LaTeX,
         "listing"   => EncodingOption::Listing,
-        _           => EncodingOption::None
+        "latex"     => EncodingOption::LaTeX,
+        _           => panic!("unknown encoding specified: {}", &s),
     }).collect();
 
     let res = 
