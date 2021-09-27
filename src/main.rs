@@ -185,7 +185,7 @@ fn main() -> Result<(), String> {
     let mut input = String::new();
     {
         let mut ap = ArgumentParser::new();
-        ap.set_description("formats a table-like stream into a LaTeX-table");
+        ap.set_description("Formats a table-like stream into a LaTeX-table. Input is considered to be UTF-8 encoded");
         ap.refer(&mut options.input_delimiter).add_option(&["-d", "--delimiter"], Store, "use this character for field delimiter").required();
         ap.refer(&mut fields).add_option(&["-f"], Store, "select only these fields;  also print any line that contains no delimiter character, unless the -s option is specified").required();
         ap.refer(&mut options.notonly_delimited).add_option(&["-s", "--only-delimited"], StoreTrue, "do not print lines not containing delimiters");
